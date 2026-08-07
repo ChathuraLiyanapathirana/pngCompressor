@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PNG Downscaler — Lightroom-style export</title>
+<style>
+  :root {
+    --bg: #111418; --panel: #1a1f26; --panel2: #20262f; --line: #2c343f;
+    --text: #e6e9ed; --muted: #8b95a3; --accent: #4da3ff; --ok: #4cc38a; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+
+  .settings {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px; display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-end;
+    margin-bottom: 16px;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { color: var(--muted); font-size: 12px; }
+  select, input[type=number] {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 10px; font-size: 14px; width: 110px;
+  }
+  select { width: auto; }
+  .check { display: flex; align-items: center; gap: 7px; padding-bottom: 8px; cursor: pointer; }
+  .check input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+  #drop {
+    border: 2px dashed var(--line); border-radius: 10px; padding: 44px 20px;
+    text-align: center; color: var(--muted); cursor: pointer; transition: .15s;
+    margin-bottom: 16px;
+  }
+  #drop.hover, #drop:hover { border-color: var(--accent); color: var(--text); background: #4da3ff0d; }
+  #drop strong { color: var(--accent); }
+
+  .toolbar { display: flex; gap: 10px; margin-bottom: 12px; }
+  .toolbar button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+  .toolbar button.primary { background: var(--accent); border-color: var(--accent); color: #08131f; font-weight: 600; }
+  .toolbar button:disabled { opacity: .4; cursor: default; }
+
+  .row {
+    display: flex; align-items: center; gap: 14px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px;
+  }
+  .row img.thumb {
+    width: 52px; height: 52px; object-fit: contain; border-radius: 6px;
+    background: repeating-conic-gradient(#2a313b 0% 25%, #1d232b 0% 50%) 0 0 / 14px 14px;
+    flex: none;
+  }
+  .row .info { flex: 1; min-width: 0; }
+  .row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .meta { color: var(--muted); font-size: 12.5px; }
+  .row .saved { font-weight: 600; color: var(--ok); white-space: nowrap; }
+  .row .saved.grew { color: var(--muted); }
+  .row .status { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .row .error { color: var(--err); font-size: 12.5px; }
+  .row a.dl {
+    color: var(--accent); text-decoration: none; font-weight: 600; font-size: 13px;
+    border: 1px solid var(--accent); border-radius: 6px; padding: 6px 12px; white-space: nowrap;
+  }
+  .row a.dl:hover { background: #4da3ff1a; }
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .8s linear infinite; flex: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  footer { color: var(--muted); font-size: 12px; margin-top: 28px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>PNG Downscaler</h1>
+  <p class="sub">Lightroom-style export: adaptive bicubic downscale in linear light + screen output sharpening. Like Lightroom, the default keeps full resolution and compresses as JPEG — zoomable, tiny files.</p>
+
+  <div class="settings">
+    <div class="field">
+      <label>Format</label>
+      <select id="format">
+        <option value="jpeg" selected>JPEG (best for photos)</option>
+        <option value="png">PNG (lossless / graphics)</option>
+      </select>
+    </div>
+    <div class="field" id="f-quality">
+      <label>Quality (1–100)</label>
+      <input type="number" id="quality" value="85" min="1" max="100" step="1">
+    </div>
+    <div class="field">
+      <label>Resize to fit</label>
+      <select id="mode">
+        <option value="none" selected>Don't resize (compress only)</option>
+        <option value="long_edge">Long edge</option>
+        <option value="percent">Percentage</option>
+        <option value="fit">Width &amp; height</option>
+      </select>
+    </div>
+    <div class="field" id="f-long-edge" hidden>
+      <label>Long edge (px)</label>
+      <input type="number" id="long_edge" value="2048" min="1" step="1">
+    </div>
+    <div class="field" id="f-percent" hidden>
+      <label>Percent (%)</label>
+      <input type="number" id="percent" value="50" min="1" max="100" step="1">
+    </div>
+    <div class="field" id="f-width" hidden>
+      <label>Max width (px)</label>
+      <input type="number" id="width" value="1920" min="1" step="1">
+    </div>
+    <div class="field" id="f-height" hidden>
+      <label>Max height (px)</label>
+      <input type="number" id="height" value="1080" min="1" step="1">
+    </div>
+    <div class="field">
+      <label>Output sharpening (screen)</label>
+      <select id="sharpen">
+        <option value="none">None</option>
+        <option value="low">Low</option>
+        <option value="standard" selected>Standard</option>
+        <option value="high">High</option>
+      </select>
+    </div>
+    <label class="check"><input type="checkbox" id="no_enlarge" checked> Don't enlarge</label>
+    <label class="check" id="f-colors" hidden><input type="checkbox" id="reduce_colors"> Reduce colors (lossy)
+      <input type="number" id="colors" value="256" min="2" max="256" style="width:70px" disabled>
+    </label>
+  </div>
+
+  <div id="drop">
+    <strong>Choose PNG or JPEG files</strong> or drag &amp; drop them here — they're processed immediately.
+    <input type="file" id="file-input" accept="image/png,image/jpeg,.png,.jpg,.jpeg" multiple hidden>
+  </div>
+
+  <div class="toolbar">
+    <button class="primary" id="btn-zip" disabled>Download all (.zip)</button>
+    <button id="btn-reprocess" disabled>Reprocess with current settings</button>
+    <button id="btn-clear" disabled>Clear</button>
+  </div>
+
+  <div id="list"></div>
+
+  <footer>Everything runs locally — files are sent only to the Python server on this machine.</footer>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const drop = $('drop'), fileInput = $('file-input'), list = $('list');
+  const items = [];
+  const CONCURRENCY = 3;
+  let inFlight = 0;
+  const queue = [];
+
+  function currentSettings() {
+    return {
+      format: $('format').value,
+      quality: $('quality').value,
+      mode: $('mode').value,
+      long_edge: $('long_edge').value,
+      percent: $('percent').value,
+      width: $('width').value,
+      height: $('height').value,
+      sharpen: $('sharpen').value,
+      no_enlarge: $('no_enlarge').checked ? '1' : '0',
+      reduce_colors: $('reduce_colors').checked ? '1' : '0',
+      colors: $('colors').value,
+    };
+  }
+
+  $('mode').addEventListener('change', () => {
+    const m = $('mode').value;
+    $('f-long-edge').hidden = m !== 'long_edge';
+    $('f-percent').hidden = m !== 'percent';
+    $('f-width').hidden = m !== 'fit';
+    $('f-height').hidden = m !== 'fit';
+  });
+  $('format').addEventListener('change', () => {
+    const jpeg = $('format').value === 'jpeg';
+    $('f-quality').hidden = !jpeg;
+    $('f-colors').hidden = jpeg;
+  });
+  $('reduce_colors').addEventListener('change', () => {
+    $('colors').disabled = !$('reduce_colors').checked;
+  });
+
+  drop.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+  ['dragover', 'dragenter'].forEach(ev =>
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hover'); }));
+  ['dragleave', 'drop'].forEach(ev =>
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('hover'); }));
+  drop.addEventListener('drop', e => addFiles(e.dataTransfer.files));
+
+  function addFiles(fileList) {
+    for (const file of fileList) {
+      if (!/\.(png|jpe?g)$/i.test(file.name) &&
+          !['image/png', 'image/jpeg'].includes(file.type)) continue;
+      const item = { file, row: buildRow(file), token: null, url: null, done: false, failed: false };
+      items.push(item);
+      list.appendChild(item.row.el);
+      enqueue(item);
+    }
+    updateToolbar();
+  }
+  window.addFiles = addFiles;
+
+  function buildRow(file) {
+    const el = document.createElement('div');
+    el.className = 'row';
+    el.innerHTML = `
+      <img class="thumb" alt="">
+      <div class="info">
+        <div class="name"></div>
+        <div class="meta"></div>
+        <div class="error" hidden></div>
+      </div>
+      <span class="saved" hidden></span>
+      <span class="status">queued</span>
+      <span class="spinner" hidden></span>
+      <a class="dl" hidden download>Download</a>`;
+    el.querySelector('.name').textContent = file.name;
+    el.querySelector('.meta').textContent = fmtBytes(file.size);
+    el.querySelector('.thumb').src = URL.createObjectURL(file);
+    return {
+      el,
+      meta: el.querySelector('.meta'),
+      error: el.querySelector('.error'),
+      saved: el.querySelector('.saved'),
+      status: el.querySelector('.status'),
+      spinner: el.querySelector('.spinner'),
+      dl: el.querySelector('.dl'),
+    };
+  }
+
+  function fmtBytes(n) {
+    if (n >= 1048576) return (n / 1048576).toFixed(2) + ' MB';
+    if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+    return n + ' B';
+  }
+
+  function enqueue(item) {
+    item.done = item.failed = false;
+    item.row.status.textContent = 'queued';
+    item.row.status.hidden = false;
+    item.row.dl.hidden = true;
+    item.row.saved.hidden = true;
+    item.row.error.hidden = true;
+    queue.push(item);
+    pump();
+  }
+
+  function pump() {
+    while (inFlight < CONCURRENCY && queue.length) {
+      const item = queue.shift();
+      inFlight++;
+      processItem(item).finally(() => { inFlight--; pump(); updateToolbar(); });
+    }
+  }
+
+  async function processItem(item) {
+    const { row } = item;
+    row.status.textContent = 'processing…';
+    row.spinner.hidden = false;
+    try {
+      const fd = new FormData();
+      fd.append('file', item.file, item.file.name);
+      for (const [k, v] of Object.entries(currentSettings())) fd.append(k, v);
+
+      const resp = await fetch('/api/process', { method: 'POST', body: fd });
+      if (!resp.ok) throw new Error((await resp.text()).replace(/<[^>]*>/g, ' ').trim() || `HTTP ${resp.status}`);
+
+      const blob = await resp.blob();
+      if (item.url) URL.revokeObjectURL(item.url);
+      item.url = URL.createObjectURL(blob);
+      item.token = resp.headers.get('X-Token');
+      item.filename = resp.headers.get('X-Filename') || 'downscaled.png';
+
+      const origB = +resp.headers.get('X-Original-Bytes');
+      const newB = +resp.headers.get('X-New-Bytes');
+      const savedPct = origB ? Math.round((1 - newB / origB) * 100) : 0;
+
+      row.meta.textContent =
+        `${resp.headers.get('X-Original-Dims')} · ${fmtBytes(origB)}  →  ` +
+        `${resp.headers.get('X-New-Dims')} · ${fmtBytes(newB)}`;
+      row.saved.textContent = savedPct >= 0 ? `−${savedPct}%` : `+${-savedPct}%`;
+      row.saved.classList.toggle('grew', savedPct < 0);
+      row.saved.hidden = false;
+      row.dl.href = item.url;
+      row.dl.download = item.filename;
+      row.dl.hidden = false;
+      row.status.hidden = true;
+      item.done = true;
+    } catch (err) {
+      row.error.textContent = err.message || 'processing failed';
+      row.error.hidden = false;
+      row.status.hidden = true;
+      item.failed = true;
+    } finally {
+      row.spinner.hidden = true;
+    }
+  }
+
+  function updateToolbar() {
+    const doneTokens = items.filter(i => i.done && i.token);
+    $('btn-zip').disabled = doneTokens.length === 0;
+    $('btn-reprocess').disabled = items.length === 0;
+    $('btn-clear').disabled = items.length === 0;
+  }
+
+  $('btn-zip').addEventListener('click', () => {
+    const tokens = items.filter(i => i.done && i.token).map(i => i.token);
+    if (tokens.length) window.location = '/api/zip?tokens=' + tokens.join(',');
+  });
+
+  $('btn-reprocess').addEventListener('click', () => {
+    items.forEach(enqueue);
+    updateToolbar();
+  });
+
+  $('btn-clear').addEventListener('click', () => {
+    items.forEach(i => i.url && URL.revokeObjectURL(i.url));
+    items.length = 0;
+    queue.length = 0;
+    list.innerHTML = '';
+    updateToolbar();
+  });
+})();
+</script>
+</body>
+</html>
