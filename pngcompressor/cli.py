@@ -1,7 +1,9 @@
 """Command-line interface."""
 
 import argparse
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from PIL import Image
@@ -44,6 +46,9 @@ def _build_parser():
                         help="quantize PNG to N colors (lossy)")
     parser.add_argument("--allow-enlarge", action="store_true",
                         help="allow upscaling smaller images")
+    parser.add_argument("-j", "--jobs", type=int,
+                        default=min(4, os.cpu_count() or 1), metavar="N",
+                        help="images to process in parallel (default: up to 4)")
     parser.add_argument("-o", "--output", type=Path,
                         help="output file (single input only)")
     parser.add_argument("--out-dir", type=Path, help="output directory")
@@ -73,29 +78,36 @@ def main(argv=None):
     pipeline = ExportPipeline()
     ext = f".{ENCODERS[args.fmt].extension}"
 
-    failures = 0
-    for src in args.inputs:
+    def run_one(src):
         if args.output:
             dst = args.output
         else:
             out_dir = args.out_dir or src.parent
             out_dir.mkdir(parents=True, exist_ok=True)
             dst = out_dir / f"{src.stem}{args.suffix}{ext}"
-        try:
-            with Image.open(src) as im:
-                im.load()
-                result = pipeline.run(im, options)
-            dst.write_bytes(result.data)
-        except Exception as exc:
-            print(f"ERROR {src}: {exc}", file=sys.stderr)
-            failures += 1
-            continue
-        orig, new = src.stat().st_size, len(result.data)
-        saved = (1 - new / orig) * 100 if orig else 0
-        change = f"{abs(saved):.1f}% {'smaller' if saved >= 0 else 'larger'}"
-        w, h = result.size
-        print(f"{src} -> {dst}  {w}x{h}  "
-              f"{orig / 1024:.0f} KB -> {new / 1024:.0f} KB  ({change})")
+        with Image.open(src) as im:
+            im.load()
+            result = pipeline.run(im, options)
+        dst.write_bytes(result.data)
+        return dst, result
+
+    failures = 0
+    with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+        futures = {pool.submit(run_one, src): src for src in args.inputs}
+        for future in as_completed(futures):
+            src = futures[future]
+            try:
+                dst, result = future.result()
+            except Exception as exc:
+                print(f"ERROR {src}: {exc}", file=sys.stderr)
+                failures += 1
+                continue
+            orig, new = src.stat().st_size, len(result.data)
+            saved = (1 - new / orig) * 100 if orig else 0
+            change = f"{abs(saved):.1f}% {'smaller' if saved >= 0 else 'larger'}"
+            w, h = result.size
+            print(f"{src} -> {dst}  {w}x{h}  "
+                  f"{orig / 1024:.0f} KB -> {new / 1024:.0f} KB  ({change})")
     return 1 if failures else 0
 
 
