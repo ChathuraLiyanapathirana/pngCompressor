@@ -45,14 +45,29 @@ Settings mirror Lightroom's export panel:
 ## CLI
 
 ```sh
-.venv/bin/python downscale.py photo.png --no-resize --format jpeg --quality 85
-.venv/bin/python downscale.py photo.png --long-edge 2048
-.venv/bin/python downscale.py *.png --percent 50 --sharpen high --out-dir out/
-.venv/bin/python downscale.py icon.png --fit 512x512 --colors 256 -o icon_small.png
+.venv/bin/python -m pngcompressor photo.png --no-resize --format jpeg --quality 85
+.venv/bin/python -m pngcompressor photo.png --long-edge 2048
+.venv/bin/python -m pngcompressor *.png --percent 50 --sharpen high --out-dir out/
+.venv/bin/python -m pngcompressor icon.png --fit 512x512 --colors 256 -o icon_small.png
 ```
 
-## Files
+## Structure
 
-- `downscale.py` — resize/sharpen/compress pipeline + CLI
-- `server.py` — Flask server exposing the pipeline to the web UI
-- `static/index.html` — the browser UI
+```
+pngcompressor/
+├── core/               processing pipeline
+│   ├── color.py        sRGB <-> linear-light conversion
+│   ├── resize.py       resize strategies + linear-light bicubic resampler
+│   ├── sharpen.py      edge-masked luminance output sharpening
+│   ├── encode.py       PNG/JPEG encoders (registry, open for extension)
+│   └── pipeline.py     ExportPipeline orchestration
+├── web/                Flask layer
+│   ├── __init__.py     application factory (dependency injection)
+│   ├── routes.py       HTTP endpoints
+│   ├── forms.py        request validation -> ExportOptions
+│   └── storage.py      ResultStore abstraction + in-memory implementation
+├── cli.py              command-line interface
+└── __main__.py         `python -m pngcompressor`
+static/                 web UI (index.html, css/, js/)
+server.py               development server entry point
+```
